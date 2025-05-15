@@ -280,7 +280,10 @@ def main():
         if not files:
             st.info("Nema fajlova."); st.stop()
 
-        picked = st.multiselect("Izaberi fajlove", [f["n"] for f in files], default=[f["n"]])
+        default_files = [files[0]["n"]] if files else []
+picked = st.multiselect("Izaberi fajlove",
+                        [f["n"] for f in files],
+                        default=default_files)
 
         if picked:
             col1, col2 = st.columns(2)
