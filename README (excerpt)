@@ -1,0 +1,12 @@
+## Quick start on Streamlit Cloud
+
+1. Fork / clone this repo  
+2. Push `app.py` and `requirements.txt` to **main**  
+3. In Streamlit Cloud → “New app” → point to this repository  
+4. (Optional) add secrets  
+   ```toml
+   # .secrets.toml
+   SMTP_SERVER="smtp.example.com"
+   SMTP_PORT="587"
+   SMTP_USERNAME="user@example.com"
+   SMTP_PASSWORD="***"
