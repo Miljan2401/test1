@@ -137,8 +137,9 @@ def schedule_nightly(base: str):
         finally: schedule_nightly(base)
 
     tmr = threading.Timer(delay, job)   # kreiraj tajmer
-tmr.daemon = True                   # naknadno ga označi kao daemon
-    add_script_run_ctx(tmr); tmr.start()
+    tmr.daemon = True                   # označi ga kao daemon
+    add_script_run_ctx(tmr)             # poveži sa Streamlitom
+    tmr.start()                         # pokreni
     st.session_state[TIMERKEY] = tmr
 
 # ─────────── UI ───────────
