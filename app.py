@@ -136,7 +136,8 @@ def schedule_nightly(base: str):
         except Exception: traceback.print_exc()
         finally: schedule_nightly(base)
 
-    tmr = threading.Timer(delay, job, daemon=True)
+    tmr = threading.Timer(delay, job)   # kreiraj tajmer
+tmr.daemon = True                   # naknadno ga označi kao daemon
     add_script_run_ctx(tmr); tmr.start()
     st.session_state[TIMERKEY] = tmr
 
