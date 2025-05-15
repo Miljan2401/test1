@@ -250,7 +250,7 @@ def main():
 
             st.write("---")
             if not checked:
-                st.info("Izaberi fajlove sa leve strane kvadratića.")
+                st.info("Izaberi fajlove za slanje ili preuzimanje.")
                 st.stop()
 
             c1, c2 = st.columns(2)
