@@ -65,29 +65,50 @@ def get_units(sid: str, base: str):
              "reg": it.get("prp", {}).get("reg_number", "")} for it in res["items"]]
 
 def list_files(sid: str, uid: int, day: date, base: str):
-    res = wialon_call("file/list", sid,
-        {"itemId": uid, "storageType": 2, "path": "tachograph/",
-         "mask": "*", "recursive": False, "fullPath": False}, base)
+    params = {
+        "itemId": uid,
+        "storageType": 2,
+        "path": "tachograph/",
+        "mask": "*",
+        "recursive": False,
+        "fullPath": False
+    }
+
+    # prvi pokušaj
+    res = wialon_call("file/list", sid, params, base)
+
+    # retry ako je error 5 (Access denied)
+    if isinstance(res, dict) and res.get("error") == 5:
+        settings = st.session_state["settings"]
+        new_sid = login_token(settings.get("token", DEFAULT_TOKEN), settings["base_url"])
+        if new_sid:
+            settings["sid"] = new_sid
+            save_settings(settings)
+            sid = new_sid
+            res = wialon_call("file/list", sid, params, base)
+        else:
+            raise RuntimeError("Access denied (5) and re-login failed.")
+
+    # bilo koji drugi error
     if isinstance(res, dict) and res.get("error"):
-        # … ovde možeš da ubaciš retry za error 5 …
-        raise RuntimeError(res)
+        raise RuntimeError(f"Wialon error {res['error']}")
 
     out = []
     for f in res:
-        # prvo probaj po ct/mt kao pre…
-        for key in ("ct","mt"):
+        # 1) po create/mod time
+        for key in ("ct", "mt"):
             if key in f and datetime.fromtimestamp(f[key], tz=timezone.utc).date() == day:
                 out.append(f)
                 break
         else:
-            # izvuci tačno 8 cifara iz imena
+            # 2) po imenu: izvuci tačno 8 cifara iz m.group(1)
             m = DATE_RE.search(f["n"])
             if m:
-                date_str = m.group(1)                  # npr. "20221007" ili "20250520"
-                file_date = datetime.strptime(date_str, "%Y%m%d").date()
+                file_date = datetime.strptime(m.group(1), "%Y%m%d").date()
                 if file_date == day:
                     out.append(f)
 
+    # sort po najnovijoj timestamp vrednosti
     out.sort(key=lambda x: x.get("mt", x.get("ct", 0)), reverse=True)
     return out
 
