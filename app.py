@@ -68,17 +68,26 @@ def list_files(sid: str, uid: int, day: date, base: str):
     res = wialon_call("file/list", sid,
         {"itemId": uid, "storageType": 2, "path": "tachograph/",
          "mask": "*", "recursive": False, "fullPath": False}, base)
-    if isinstance(res, dict) and "error" in res: raise RuntimeError(res)
+    if isinstance(res, dict) and res.get("error"):
+        # … ovde možeš da ubaciš retry za error 5 …
+        raise RuntimeError(res)
 
     out = []
     for f in res:
-        for key in ("ct", "mt"):
+        # prvo probaj po ct/mt kao pre…
+        for key in ("ct","mt"):
             if key in f and datetime.fromtimestamp(f[key], tz=timezone.utc).date() == day:
-                out.append(f); break
-        else:
-            m = DATE_RE.search(f["n"])
-            if m and datetime.strptime(m.group(), "%Y%m%d").date() == day:
                 out.append(f)
+                break
+        else:
+            # izvuci tačno 8 cifara iz imena
+            m = DATE_RE.search(f["n"])
+            if m:
+                date_str = m.group(1)                  # npr. "20221007" ili "20250520"
+                file_date = datetime.strptime(date_str, "%Y%m%d").date()
+                if file_date == day:
+                    out.append(f)
+
     out.sort(key=lambda x: x.get("mt", x.get("ct", 0)), reverse=True)
     return out
 
