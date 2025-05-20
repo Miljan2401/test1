@@ -9,7 +9,7 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 # ─────────── konstante ───────────
 DEFAULT_TOKEN = "975449712b54d5463a9bc22eddfacb006D57EA7D1C7F73A4690338D42F14313ED12D0C1F"
-DATE_RE  = re.compile(r"20\d{6}")               # YYYYMMDD u imenu fajla
+DATE_RE = re.compile(r"(20\d{6})(?=\D|$)")               # YYYYMMDD u imenu fajla
 EU_BG    = timezone(timedelta(hours=2))         # Europe/Belgrade
 SETFILE  = "smtp_settings.json"
 TIMERKEY = "auto_timer"
