@@ -7,36 +7,6 @@ from urllib.parse import unquote_plus
 import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-# ─── CSS: pozadinska slika + blur + overlay ─────────────────────
-st.markdown(
-    """
-    <style>
-    /* zamućena slika */
-    body::before {
-        content:"";
-        position:fixed;
-        inset:0;
-        background:url('app_icon.png') center/cover no-repeat fixed;
-        filter:blur(10px);
-        z-index:-2;
-    }
-
-    /* poluprovidni bijeli film iznad slike */
-    body::after{
-        content:"";
-        position:fixed;
-        inset:0;
-        background:rgba(255,255,255,0.45);
-        z-index:-1;
-    }
-
-    /* Streamlit kontejner bez svoje podloge */
-    .stApp{background:transparent;}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
 # ─── KONSTANTE ───────────────────────────────────────────────────
 DEFAULT_TOKEN = st.secrets.get("WIALON_TOKEN", "")        # ili ostavi ""
 DATE_RE  = re.compile(r"20\d{6}")                         # tačno 8 cifara
