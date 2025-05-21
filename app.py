@@ -54,7 +54,7 @@ def wialon_call(svc: str, sid: str, params: dict | None,
                timeout=20).json()
 
     # error 5 = invalid/expired SID → pokušaj login tokenom i ponovi
-    if retry and isinstance(resp, dict) and resp.get("error") == 5:
+    if retry and isinstance(resp, dict) and resp.get("error") in (1, 5):
         token = st.session_state["settings"].get("token", "")
         if token:
             new_sid = login_token(token, base)
