@@ -83,7 +83,13 @@ def list_files(sid: str, uid: int, day: date, base: str):
         {"itemId": uid, "storageType": 2, "path": "tachograph/",
          "mask": "*", "recursive": False, "fullPath": False},
         base)
-    if isinstance(res, dict) and "error" in res: raise RuntimeError(res)
+
+    # --- ako je folder prazan ili ne postoji, Wialon vraća error 5 ---
+    if isinstance(res, dict):
+        if res.get("error") == 5:
+            return []          # tretiraj kao „nema fajlova“
+        else:
+            raise RuntimeError(res)
 
     out = []
     for f in res:
