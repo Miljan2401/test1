@@ -259,7 +259,7 @@ def main():
                 files = list_files(s["sid"], unit["id"], day, s["base_url"])
             except Exception as e:
                 st.error(e); st.stop()
-            if not files: st.info("Nema fajlova."); st.stop()
+            if not files: st.info("Nema fajlova za izabrano vozilo."); st.stop()
 
             picked = []
             for f in files:
