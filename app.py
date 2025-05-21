@@ -8,7 +8,7 @@ import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 # ─────────── konstante ───────────
-DEFAULT_TOKEN = ""
+DEFAULT_TOKEN = "975449712b54d5463a9bc22eddfacb006D57EA7D1C7F73A4690338D42F14313ED12D0C1F"
 DATE_RE  = re.compile(r"20\d{6}")               # YYYYMMDD u imenu fajla
 EU_BG    = timezone(timedelta(hours=2))         # Europe/Belgrade
 SETFILE  = "smtp_settings.json"
@@ -65,50 +65,20 @@ def get_units(sid: str, base: str):
              "reg": it.get("prp", {}).get("reg_number", "")} for it in res["items"]]
 
 def list_files(sid: str, uid: int, day: date, base: str):
-    params = {
-        "itemId": uid,
-        "storageType": 2,
-        "path": "tachograph/",
-        "mask": "*",
-        "recursive": False,
-        "fullPath": False
-    }
-
-    # initial call
-    res = wialon_call("file/list", sid, params, base)
-
-    # if access denied, retry login → new SID → retry once
-    if isinstance(res, dict) and res.get("error") == 5:
-        settings = st.session_state["settings"]
-        new_sid = login_token(settings.get("token", DEFAULT_TOKEN), settings["base_url"])
-        if new_sid:
-            settings["sid"] = new_sid
-            save_settings(settings)
-            sid = new_sid
-            res = wialon_call("file/list", sid, params, base)
-        else:
-            raise RuntimeError("Access denied (error 5) and re-login failed.")
-
-    # any other Wialon error
-    if isinstance(res, dict) and res.get("error"):
-        raise RuntimeError(f"Wialon error {res['error']}")
+    res = wialon_call("file/list", sid,
+        {"itemId": uid, "storageType": 2, "path": "tachograph/",
+         "mask": "*", "recursive": False, "fullPath": False}, base)
+    if isinstance(res, dict) and "error" in res: raise RuntimeError(res)
 
     out = []
     for f in res:
-        # 1) try by create/modify timestamp
         for key in ("ct", "mt"):
             if key in f and datetime.fromtimestamp(f[key], tz=timezone.utc).date() == day:
-                out.append(f)
-                break
+                out.append(f); break
         else:
-            # 2) try by filename date
             m = DATE_RE.search(f["n"])
-            if m:
-                file_date = datetime.strptime(m.group(1), "%Y%m%d").date()
-                if file_date == day:
-                    out.append(f)
-
-    # sort by newest
+            if m and datetime.strptime(m.group(), "%Y%m%d").date() == day:
+                out.append(f)
     out.sort(key=lambda x: x.get("mt", x.get("ct", 0)), reverse=True)
     return out
 
