@@ -17,7 +17,7 @@ st.markdown(
         position:fixed;
         inset:0;
         background:url('app_icon.png') center/cover no-repeat fixed;
-        filter:blur(10px);
+        filter:blur(0.1px);
         z-index:-2;
     }
 
