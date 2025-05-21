@@ -16,7 +16,7 @@ st.markdown(
         background-size: cover;
         background-attachment: fixed;
         background-position: center;
-        filter: blur(1px);
+        filter: blur(0.1px);
     }
     body::before {
         content: "";
