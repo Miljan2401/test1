@@ -8,9 +8,9 @@ import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 # ─── KONSTANTE ───────────────────────────────────────────────────
-DEFAULT_TOKEN = st.secrets.get("WIALON_TOKEN", "")        # ili ostavi ""
-DATE_RE  = re.compile(r"20\d{6}")                         # tačno 8 cifara
-EU_BG    = timezone(timedelta(hours=2))                   # Europe/Belgrade
+DEFAULT_TOKEN = st.secrets.get("WIALON_TOKEN", "")   # ili ostavi "" bez secrets
+DATE_RE  = re.compile(r"20\d{6}")                    # hvata TAČNO 8 cifara YYYYMMDD
+EU_BG    = timezone(timedelta(hours=2))              # Europe/Belgrade
 SETFILE  = "smtp_settings.json"
 TIMERKEY = "auto_timer"
 
@@ -23,10 +23,8 @@ sha = lambda s: hashlib.sha256(s.encode()).hexdigest()
 
 def load_settings() -> dict:
     if os.path.exists(SETFILE):
-        try:
-            return json.load(open(SETFILE, encoding="utf-8"))
-        except Exception:
-            pass
+        try: return json.load(open(SETFILE, encoding="utf-8"))
+        except Exception: pass
     return {}
 
 def save_settings(s: dict) -> None:
@@ -35,18 +33,14 @@ def save_settings(s: dict) -> None:
 # ─── WIALON API WRAPPER ──────────────────────────────────────────
 def login_token(token: str, base: str) -> str | None:
     try:
-        r = requests.get(
-            base,
-            params={"svc": "token/login",
-                    "params": json.dumps({"token": token})},
-            timeout=20,
-        ).json()
-        if isinstance(r, dict) and "error" in r:
-            raise RuntimeError(r)
+        r = requests.get(base,
+                         params={"svc": "token/login",
+                                 "params": json.dumps({"token": token})},
+                         timeout=20).json()
+        if isinstance(r, dict) and "error" in r: raise RuntimeError(r)
         return r["eid"]
     except Exception as e:
-        st.error(e)
-        return None
+        st.error(e); return None
 
 def wialon_call(svc: str, sid: str, params: dict | None,
                 base: str, *, get=False, retry=True):
@@ -54,14 +48,12 @@ def wialon_call(svc: str, sid: str, params: dict | None,
     if params is not None:
         payload["params"] = json.dumps(params, separators=(",", ":"))
     req = requests.get if get else requests.post
-    resp = req(
-        base,
-        params=payload if get else None,
-        data=payload if not get else None,
-        timeout=20,
-    ).json()
+    resp = req(base,
+               params=payload if get else None,
+               data=payload if not get else None,
+               timeout=20).json()
 
-    # error 1/5 → invalid SID ⇒ refresh via token
+    # error 5 = invalid/expired SID → pokušaj login tokenom i ponovi
     if retry and isinstance(resp, dict) and resp.get("error") in (1, 5):
         token = st.session_state["settings"].get("token", "")
         if token:
@@ -76,48 +68,42 @@ def wialon_call(svc: str, sid: str, params: dict | None,
 def get_units(sid: str, base: str):
     res = wialon_call(
         "core/search_items", sid,
-        {"spec": {"itemsType": "avl_unit",
-                  "propName": "sys_name",
-                  "propValueMask": "*",
-                  "sortType": "sys_name"},
+        {"spec": {"itemsType": "avl_unit", "propName": "sys_name",
+                  "propValueMask": "*", "sortType": "sys_name"},
          "force": 1, "flags": 1, "from": 0, "to": 0},
-        base,
-    )
-    if isinstance(res, dict) and "error" in res:
-        raise RuntimeError(res)
-    return [
-        {"id": it["id"],
-         "name": it.get("nm", "N/A"),
-         "reg": it.get("prp", {}).get("reg_number", "")}
-        for it in res["items"]
-    ]
+        base)
+    if isinstance(res, dict) and "error" in res: raise RuntimeError(res)
+    return [{"id": it["id"],
+             "name": it.get("nm", "N/A"),
+             "reg": it.get("prp", {}).get("reg_number", "")} for it in res["items"]]
 
 def list_files(sid: str, uid: int, day: date, base: str):
     res = wialon_call(
         "file/list", sid,
         {"itemId": uid, "storageType": 2, "path": "tachograph/",
          "mask": "*", "recursive": False, "fullPath": False},
-        base,
-    )
+        base)
 
+    # --- ako je folder prazan ili ne postoji, Wialon vraća error 5 ---
     if isinstance(res, dict):
-        if res.get("error") == 5:     # folder prazan
-            return []
+        if res.get("error") == 5:
+            return []          # tretiraj kao „nema fajlova“
         else:
             raise RuntimeError(res)
 
     out = []
     for f in res:
+        # po ct/mt
         for key in ("ct", "mt"):
             ts = f.get(key)
             if ts and datetime.fromtimestamp(ts, tz=timezone.utc).date() == day:
-                out.append(f)
-                break
+                out.append(f); break
         else:
             m = DATE_RE.search(f["n"])
             if m:
                 try:
-                    if datetime.strptime(m.group(), "%Y%m%d").date() == day:
+                    file_date = datetime.strptime(m.group(), "%Y%m%d").date()
+                    if file_date == day:
                         out.append(f)
                 except ValueError:
                     pass
@@ -125,21 +111,14 @@ def list_files(sid: str, uid: int, day: date, base: str):
     return out
 
 def get_file(sid: str, uid: int, fname: str, base: str) -> bytes | None:
-    r = requests.get(
-        base,
-        params={"svc": "file/get",
-                "sid": sid,
-                "params": json.dumps(
-                    {"itemId": uid,
-                     "storageType": 2,
-                     "path": f"tachograph/{fname}"})},
-        timeout=20,
-    )
+    r = requests.get(base,
+        params={"svc": "file/get", "sid": sid,
+                "params": json.dumps({"itemId": uid, "storageType": 2,
+                                      "path": f"tachograph/{fname}"})}, timeout=20)
     return r.content if r.status_code == 200 else None
 
 # ─── MAIL & SCHEDULER ───────────────────────────────────────────
-def send_mail(subj: str, body: str, att: bytes | None,
-              fname: str, s: dict):
+def send_mail(subj: str, body: str, att: bytes | None, fname: str, s: dict):
     try:
         msg = EmailMessage()
         msg["Subject"], msg["From"], msg["To"] = subj, s["username"], s["recipients"]
@@ -148,43 +127,35 @@ def send_mail(subj: str, body: str, att: bytes | None,
             msg.add_attachment(att, maintype="application",
                                subtype="zip", filename=fname)
         with smtplib.SMTP(s["server"], int(s["port"])) as smtp:
-            smtp.starttls()
-            smtp.login(s["username"], s["password"])
-            smtp.send_message(msg)
+            smtp.starttls(); smtp.login(s["username"], s["password"]); smtp.send_message(msg)
     except Exception as e:
         st.error(f"SMTP greška: {e}")
 
 def schedule_nightly(base: str):
     tmr: threading.Timer | None = st.session_state.get(TIMERKEY)
-    if tmr and tmr.is_alive():
-        tmr.cancel()
+    if tmr and tmr.is_alive(): tmr.cancel()
 
     s = st.session_state["settings"]
-    if not s.get("auto_send"):
-        return
+    if not s.get("auto_send"): return
 
     now = datetime.now(EU_BG)
-    next_run = datetime.combine(
+    run_dt = datetime.combine(
         now.date() + (timedelta(days=1) if now.time() >= t(2, 5) else timedelta()),
-        t(2, 5),
-        tzinfo=EU_BG,
-    )
-    delay = (next_run - now).total_seconds()
+        t(2, 5), tzinfo=EU_BG)
+    delay = (run_dt - now).total_seconds()
 
     def job():
         try:
             sid, baseu = s.get("sid"), s["base_url"]
-            if not sid:
-                return
+            if not sid: return
             units = get_units(sid, baseu)
-            prev = (datetime.now(EU_BG) - timedelta(days=1)).date()
-            buf = BytesIO()
+            prev  = (datetime.now(EU_BG) - timedelta(days=1)).date()
+            buf   = BytesIO()
             with zipfile.ZipFile(buf, "w") as z:
                 for u in units:
                     for f in list_files(sid, u["id"], prev, baseu):
                         d = get_file(sid, u["id"], f["n"], baseu)
-                        if d:
-                            z.writestr(os.path.join(u["reg"] or u["name"], f["n"]), d)
+                        if d: z.writestr(os.path.join(u["reg"] or u["name"], f["n"]), d)
             buf.seek(0)
             send_mail(f"DDD fajlovi {prev:%d.%m.%Y}",
                       "Automatski ZIP za sva vozila.",
@@ -194,10 +165,8 @@ def schedule_nightly(base: str):
         finally:
             schedule_nightly(base)
 
-    tmr = threading.Timer(delay, job)
-    tmr.daemon = True
-    add_script_run_ctx(tmr)
-    tmr.start()
+    tmr = threading.Timer(delay, job); tmr.daemon = True
+    add_script_run_ctx(tmr); tmr.start()
     st.session_state[TIMERKEY] = tmr
 
 # ─── UI / MAIN ─────────────────────────────────────────────────
@@ -205,17 +174,14 @@ def main():
     st.set_page_config("Wialon DDD Manager", layout="wide")
 
     qs = st.experimental_get_query_params()
-    base_url = normalize_base_url(
-        unquote_plus(qs.get("baseUrl", ["https://hst-api.wialon.com"])[0])
-    )
-    sid_qs = qs.get("sid", [None])[0]
+    base_url = normalize_base_url(unquote_plus(qs.get("baseUrl", ["https://hst-api.wialon.com"])[0]))
+    sid_qs   = qs.get("sid", [None])[0]
 
     if "settings" not in st.session_state:
         st.session_state["settings"] = load_settings()
     s = st.session_state["settings"]
     s.setdefault("base_url", base_url)
-    if sid_qs:
-        s["sid"] = sid_qs
+    if sid_qs: s["sid"] = sid_qs
 
     page = st.sidebar.radio("Navigacija", ["Files", "Admin"])
 
@@ -225,29 +191,27 @@ def main():
             if not st.session_state.get("admin_ok"):
                 pwd = st.sidebar.text_input("Admin lozinka", type="password")
                 if st.sidebar.button("Login"):
-                    st.session_state["admin_ok"] = sha(pwd) == s["admin_pw_hash"]
-                    if not st.session_state["admin_ok"]:
-                        st.sidebar.error("Pogrešna lozinka")
+                    st.session_state["admin_ok"] = (sha(pwd) == s["admin_pw_hash"])
+                    if not st.session_state["admin_ok"]: st.sidebar.error("Pogrešna lozinka")
                     st.experimental_rerun()
                 st.stop()
         else:
-            st.sidebar.info("Postavi početnu admin lozinku")
-            npw = st.sidebar.text_input("Nova lozinka", type="password")
-            if st.sidebar.button("Postavi"):
-                if npw.strip():
-                    s["admin_pw_hash"] = sha(npw)
-                    save_settings(s)
-                    st.sidebar.success("Lozinka sačuvana – prijavi se.")
-                else:
-                    st.sidebar.error("Lozinka ne može biti prazna.")
-            st.stop()
+    st.sidebar.info("Postavi početnu admin lozinku")
+    npw = st.sidebar.text_input("Nova lozinka", type="password")
+    if st.sidebar.button("Postavi"):
+        if npw.strip():
+            s["admin_pw_hash"] = sha(npw)
+            save_settings(s)
+            st.sidebar.success("Lozinka sačuvana – prijavi se.")
+        else:
+            st.sidebar.error("Lozinka ne može biti prazna.")
+    st.stop()   # ⚠️ blokiraj prikaz Admin panela dok se ne prijavi
 
         st.header("Admin panel")
         if st.checkbox("Promeni lozinku"):
             npw = st.text_input("Nova lozinka", type="password")
             if st.button("Sačuvaj novu lozinku"):
-                s["admin_pw_hash"] = sha(npw)
-                save_settings(s)
+                s["admin_pw_hash"] = sha(npw); save_settings(s)
                 st.success("Lozinka promenjena."); st.experimental_rerun()
 
         st.subheader("Wialon token")
@@ -259,13 +223,12 @@ def main():
         s["password"]   = st.text_input("Password",   s.get("password", ""), type="password")
         s["recipients"] = st.text_input("Recipients", s.get("recipients", ""))
 
-        s["auto_send"] = st.checkbox("Noćni auto-mail (02:05)",
-                                     value=s.get("auto_send", False))
+        s["auto_send"] = st.checkbox("Noćni auto-mail (02:05)", value=s.get("auto_send", False))
 
-        col1, col2 = st.columns(2)
-        if col1.button("Sačuvaj"):
+        c1, c2 = st.columns(2)
+        if c1.button("Sačuvaj"):
             save_settings(s); schedule_nightly(s["base_url"]); st.success("Sačuvano.")
-        if col2.button("Test e-mail"):
+        if c2.button("Test e-mail"):
             send_mail("Test", "SMTP test", None, "", s); st.success("Poslat.")
 
     # ─── FILES TAB ───
@@ -274,11 +237,8 @@ def main():
             if st.button("Login tokenom"):
                 sid = login_token(s.get("token", DEFAULT_TOKEN), s["base_url"])
                 if sid:
-                    s["sid"] = sid; save_settings(s)
-                    schedule_nightly(s["base_url"])
-                    st.experimental_rerun()
-            st.info("Dodaj ?sid=... u URL ili se prijavi tokenom.")
-            st.stop()
+                    s["sid"] = sid; save_settings(s); schedule_nightly(s["base_url"]); st.experimental_rerun()
+            st.info("Dodaj ?sid=... u URL ili se prijavi tokenom."); st.stop()
 
         try:
             units = get_units(s["sid"], s["base_url"])
@@ -287,26 +247,25 @@ def main():
 
         col_left, col_right = st.columns([1, 2])
 
+        # LEFT pane
         with col_left:
             st.markdown("### Vozila")
             day = st.date_input("Datum", date.today())
-            q = st.text_input("Pretraga")
-            flt = [u for u in units if q.lower() in (u["reg"] + u["name"]).lower()]
-            if not flt:
-                st.warning("Nema vozila."); st.stop()
+            q   = st.text_input("Pretraga")
+            flt = [u for u in units if q.lower() in (u["reg"]+u["name"]).lower()]
+            if not flt: st.warning("Nema vozila."); st.stop()
             sel_lbl = st.radio("Lista vozila",
-                               [f"{u['reg']}  —  {u['name']}" for u in flt],
-                               index=0)
+                               [f"{u['reg']}  —  {u['name']}" for u in flt], index=0)
             unit = next(u for u in flt if f"{u['reg']}  —  {u['name']}" == sel_lbl)
 
+        # RIGHT pane
         with col_right:
             st.markdown(f"### Fajlovi za **{unit['reg'] or unit['name']}**")
             try:
                 files = list_files(s["sid"], unit["id"], day, s["base_url"])
             except Exception as e:
                 st.error(e); st.stop()
-            if not files:
-                st.info("Nema fajlova za izabrano vozilo i datum."); st.stop()
+            if not files: st.info("Nema fajlova za izabrano vozilo i datum."); st.stop()
 
             picked = []
             for f in files:
@@ -319,36 +278,34 @@ def main():
 
             c1, c2 = st.columns(2)
 
+            # DOWNLOAD
             with c1:
                 if len(picked) == 1:
                     data = get_file(s["sid"], unit["id"], picked[0], s["base_url"])
                     if data:
-                        st.download_button("Preuzmi fajl", data, picked[0],
-                                           mime="application/octet-stream")
+                        st.download_button("Preuzmi fajl", data, picked[0], mime="application/octet-stream")
                 else:
                     buf = BytesIO()
                     with zipfile.ZipFile(buf, "w") as z:
                         for fn in picked:
                             d = get_file(s["sid"], unit["id"], fn, s["base_url"])
-                            if d:
-                                z.writestr(fn, d)
+                            if d: z.writestr(fn, d)
                     buf.seek(0)
                     st.download_button("Preuzmi ZIP", buf.read(),
-                                       f"{unit['reg']}_{day}.zip",
-                                       mime="application/zip")
+                                       f"{unit['reg']}_{day}.zip", mime="application/zip")
 
+            # EMAIL
             with c2:
                 if st.button("Pošalji e-mail"):
                     if len(picked) == 1:
-                        att = get_file(s["sid"], unit["id"], picked[0], s["base_url"])
+                        att   = get_file(s["sid"], unit["id"], picked[0], s["base_url"])
                         fname = picked[0]
                     else:
                         buf = BytesIO()
                         with zipfile.ZipFile(buf, "w") as z:
                             for fn in picked:
                                 d = get_file(s["sid"], unit["id"], fn, s["base_url"])
-                                if d:
-                                    z.writestr(fn, d)
+                                if d: z.writestr(fn, d)
                         buf.seek(0); att = buf.read()
                         fname = f"{unit['reg']}_{day}.zip"
 
