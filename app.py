@@ -196,10 +196,16 @@ def main():
                     st.experimental_rerun()
                 st.stop()
         else:
-            st.sidebar.info("Postavi početnu lozinku")
-            npw = st.sidebar.text_input("Nova lozinka", type="password")
-            if st.sidebar.button("Postavi"):
-                s["admin_pw_hash"] = sha(npw); save_settings(s); st.sidebar.success("Sačuvano."); st.stop()
+    st.sidebar.info("Postavi početnu admin lozinku")
+    npw = st.sidebar.text_input("Nova lozinka", type="password")
+    if st.sidebar.button("Postavi"):
+        if npw.strip():
+            s["admin_pw_hash"] = sha(npw)
+            save_settings(s)
+            st.sidebar.success("Lozinka sačuvana – prijavi se.")
+        else:
+            st.sidebar.error("Lozinka ne može biti prazna.")
+    st.stop()   # ⚠️ blokiraj prikaz Admin panela dok se ne prijavi
 
         st.header("Admin panel")
         if st.checkbox("Promeni lozinku"):
