@@ -62,16 +62,29 @@ def save_user(h, d):
     json.dump(d, open(os.path.join(USER_DIR, f"{h}.json"), "w", encoding="utf-8"))
 
 # ──────────────────────────── Wialon API helperi ───────────────────────────────────
-def login_token(token, base):
+def login_token(token: str, base: str) -> str | None:
+    """
+    Vrati SID ili None.
+    Ako token nije postavljen (prazan) ili nije 64-znamenkasti hex,
+    nemoj ni zvati Wialon – samo vrati None bez poruke.
+    """
+    token = token.strip()
+    if len(token) != 64 or not all(c in "0123456789abcdefABCDEF" for c in token):
+        return None                          # TIHO odustani
+
     try:
-        res = requests.get(base, params={"svc": "token/login",
-                                         "params": json.dumps({"token": token})},
-                           timeout=20).json()
-        if isinstance(res, dict) and "error" in res:
-            raise RuntimeError(res)
-        return res["eid"]
+        r = requests.get(
+            base,
+            params={"svc": "token/login",
+                    "params": json.dumps({"token": token})},
+            timeout=20
+        ).json()
+        if isinstance(r, dict) and "error" in r:
+            raise RuntimeError(r)
+        return r["eid"]
     except Exception as e:
-        st.error(e); return None
+        st.error(e)
+        return None
 
 def wialon_call(svc, sid, params, base, *, get=False, retry=True):
     payload = {"svc": svc, "sid": sid}
