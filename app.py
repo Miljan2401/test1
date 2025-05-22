@@ -7,7 +7,7 @@ from urllib.parse import unquote_plus
 import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-# ──────────────────────────── Streamlit init + dark skin ───────────────────────────
+# ─── Streamlit init & dark skin ──────────────────────────────
 st.set_page_config("Wialon DDD Manager", layout="wide")
 st.markdown(
     """
@@ -21,21 +21,21 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ──────────────────────────────── konstante & putanje ──────────────────────────────
-DEFAULT_TOKEN  = st.secrets.get("WIALON_TOKEN", "")
-DATE_RE        = re.compile(r"20\\d{6}")
-EU_BG          = timezone(timedelta(hours=2))
+# ─── konstante & putanje ─────────────────────────────────────
+DEFAULT_TOKEN = st.secrets.get("WIALON_TOKEN", "")
+DATE_RE       = re.compile(r"20\d{6}")
+EU_BG         = timezone(timedelta(hours=2))
 
-GLOBAL_FILE    = "global_settings.json"     # SMTP + admin lozinka
-USER_DIR       = "user_settings"            # jedan JSON po tokenu
-TIMERKEY       = "timers"                   # dict tajmera u session_state
+GLOBAL_FILE   = "global_settings.json"   # SMTP + admin lozinka
+USER_DIR      = "user_settings"          # per-token json fajlovi
+TIMERKEY      = "timers"                 # dict tajmera u session_state
 os.makedirs(USER_DIR, exist_ok=True)
 
 sha = lambda s: hashlib.sha256(s.encode()).hexdigest()
-normalize = lambda u: u.rstrip("/") + ("/wialon/ajax.html"
-                                       if not u.rstrip("/").endswith("/wialon/ajax.html") else "")
+normalize = lambda u: u.rstrip("/") + (
+    "/wialon/ajax.html" if not u.rstrip("/").endswith("/wialon/ajax.html") else "")
 
-# ───────────────────────── globale postavke (SMTP + admin) ─────────────────────────
+# ─── global settings (SMTP + admin) ──────────────────────────
 def load_global():
     if os.path.exists(GLOBAL_FILE):
         try:
@@ -45,46 +45,36 @@ def load_global():
     return {"server": "", "port": "587", "username": "", "password": "",
             "admin_pw_hash": ""}
 
-def save_global(d):
-    json.dump(d, open(GLOBAL_FILE, "w", encoding="utf-8"))
+def save_global(cfg): json.dump(cfg, open(GLOBAL_FILE, "w", encoding="utf-8"))
 
-# ───────────────────────── token-specifične postavke ───────────────────────────────
+# ─── per-token settings (recipients + auto_send) ─────────────
 def load_user(h):
-    path = os.path.join(USER_DIR, f"{h}.json")
-    if os.path.exists(path):
+    fn = os.path.join(USER_DIR, f"{h}.json")
+    if os.path.exists(fn):
         try:
-            return json.load(open(path, encoding="utf-8"))
+            return json.load(open(fn, encoding="utf-8"))
         except Exception:
             pass
     return {"recipients": "", "auto_send": False}
 
-def save_user(h, d):
-    json.dump(d, open(os.path.join(USER_DIR, f"{h}.json"), "w", encoding="utf-8"))
+def save_user(h, cfg):
+    json.dump(cfg, open(os.path.join(USER_DIR, f"{h}.json"), "w", encoding="utf-8"))
 
-# ──────────────────────────── Wialon API helperi ───────────────────────────────────
-def login_token(token: str, base: str) -> str | None:
-    """
-    Vrati SID ili None.
-    Ako token nije postavljen (prazan) ili nije 64-znamenkasti hex,
-    nemoj ni zvati Wialon – samo vrati None bez poruke.
-    """
+# ─── Wialon API helperi ──────────────────────────────────────
+def login_token(token, base):
     token = token.strip()
     if len(token) != 64 or not all(c in "0123456789abcdefABCDEF" for c in token):
-        return None                          # TIHO odustani
-
+        return None            # tihi izlaz – nema greške
     try:
-        r = requests.get(
-            base,
-            params={"svc": "token/login",
-                    "params": json.dumps({"token": token})},
-            timeout=20
-        ).json()
+        r = requests.get(base,
+                         params={"svc": "token/login",
+                                 "params": json.dumps({"token": token})},
+                         timeout=20).json()
         if isinstance(r, dict) and "error" in r:
             raise RuntimeError(r)
         return r["eid"]
     except Exception as e:
-        st.error(e)
-        return None
+        st.error(e); return None
 
 def wialon_call(svc, sid, params, base, *, get=False, retry=True):
     payload = {"svc": svc, "sid": sid}
@@ -96,8 +86,7 @@ def wialon_call(svc, sid, params, base, *, get=False, retry=True):
                data=payload if not get else None,
                timeout=20).json()
     if retry and isinstance(res, dict) and res.get("error") in (1, 5):
-        token = st.session_state["token"]
-        new_sid = login_token(token, base)
+        new_sid = login_token(st.session_state["token"], base)
         if new_sid:
             st.session_state["sid"] = new_sid
             return wialon_call(svc, new_sid, params, base, get=get, retry=False)
@@ -144,11 +133,11 @@ def get_file(sid, uid, fname, base):
         timeout=20)
     return r.content if r.status_code == 200 else None
 
-# ───────────────────────── mail & nightly scheduler ────────────────────────────────
+# ─── mail & nightly scheduler ────────────────────────────────
 def send_mail(subj, body, att, fname, gcfg, recipients):
     try:
         msg = EmailMessage()
-        msg["Subject"] = subj; msg["From"] = gcfg["username"]; msg["To"] = recipients
+        msg["Subject"], msg["From"], msg["To"] = subj, gcfg["username"], recipients
         msg.set_content(body)
         if att:
             msg.add_attachment(att, maintype="application",
@@ -158,51 +147,47 @@ def send_mail(subj, body, att, fname, gcfg, recipients):
     except Exception as e:
         st.error(f"SMTP greška: {e}")
 
-def schedule_nightly(base, tok_hash, ucfg, gcfg):
+def schedule_nightly(base, h, ucfg, gcfg):
     timers = st.session_state.setdefault(TIMERKEY, {})
-    if tok_hash in timers and timers[tok_hash].is_alive():
-        timers[tok_hash].cancel()
-
+    if h in timers and timers[h].is_alive():
+        timers[h].cancel()
     if not ucfg.get("auto_send"):
         return
 
     now = datetime.now(EU_BG)
     tomorrow = now.date() + (timedelta(days=1) if now.time() >= time(2, 5) else timedelta())
-    run_dt = datetime.combine(tomorrow, time(2, 5), tzinfo=EU_BG)
-    delay = (run_dt - now).total_seconds()
+    run_dt   = datetime.combine(tomorrow, time(2, 5), tzinfo=EU_BG)
+    delay    = (run_dt - now).total_seconds()
 
     def job():
         try:
             sid = st.session_state["sid"]
-            if not sid:
-                return
+            if not sid: return
             units = get_units(sid, base)
-            prev = (datetime.now(EU_BG) - timedelta(days=1)).date()
-            buf = BytesIO()
+            prev  = (datetime.now(EU_BG) - timedelta(days=1)).date()
+            buf   = BytesIO()
             with zipfile.ZipFile(buf, "w") as z:
                 for u in units:
                     for f in list_files(sid, u["id"], prev, base):
                         d = get_file(sid, u["id"], f["n"], base)
-                        if d:
-                            z.writestr(os.path.join(u["reg"] or u["name"], f["n"]), d)
+                        if d: z.writestr(os.path.join(u["reg"] or u["name"], f["n"]), d)
             buf.seek(0)
-            send_mail(f"DDD fajlovi {prev:%d.%m.%Y}", "Automatski ZIP za sva vozila.",
+            send_mail(f"DDD fajlovi {prev:%d.%m.%Y}",
+                      "Automatski ZIP za sva vozila.",
                       buf.read(), f"DDD_{prev}.zip", gcfg, ucfg["recipients"])
         finally:
-            schedule_nightly(base, tok_hash, ucfg, gcfg)   # resched
+            schedule_nightly(base, h, ucfg, gcfg)
 
     t = threading.Timer(delay, job); t.daemon = True
-    add_script_run_ctx(t); t.start(); timers[tok_hash] = t
+    add_script_run_ctx(t); t.start(); timers[h] = t
 
-# ─────────────────────────── UI / MAIN ─────────────────────────────────────────────
+# ─── UI / MAIN ────────────────────────────────────────────────
 def main():
-    # logo
     if os.path.exists("app_icon.png"):
         st.image("app_icon.png", width=220)
 
-    gcfg = load_global()  # SMTP + admin
+    gcfg = load_global()
 
-    # --- query params / session bootstrap ---
     qs = st.experimental_get_query_params()
     base_url = normalize(qs.get("baseUrl", ["https://hst-api.wialon.com"])[0])
     st.session_state.setdefault("token", qs.get("token", [DEFAULT_TOKEN])[0])
@@ -213,11 +198,10 @@ def main():
 
     page = st.sidebar.radio("Navigacija", ["Files", "Admin"])
 
-    # ============= ADMIN =============
+    # =========== ADMIN ===========
     if page == "Admin":
         st.header("Admin panel")
 
-        # global login
         if gcfg["admin_pw_hash"]:
             if not st.session_state.get("admin_ok"):
                 pw = st.sidebar.text_input("Admin lozinka", type="password")
@@ -233,18 +217,16 @@ def main():
             if st.sidebar.button("Postavi"):
                 if npw.strip():
                     gcfg["admin_pw_hash"] = sha(npw); save_global(gcfg)
-                    st.sidebar.success("Lozinka sačuvana – prijavi se.")
+                    st.sidebar.success("Lozinka sačuvana – prijavi se")
                 else:
                     st.sidebar.error("Lozinka ne može biti prazna.")
             st.stop()
 
-        # SMTP (global)
-        st.subheader("SMTP (zajednički za sve tokene)")
+        st.subheader("SMTP (globalno)")
         for fld in ("server", "port", "username", "password"):
             gcfg[fld] = st.text_input(fld.capitalize(), gcfg[fld],
                                       type="password" if fld == "password" else "default")
 
-        # promjena admin lozinke
         if st.checkbox("Promeni admin lozinku"):
             new_pw = st.text_input("Nova lozinka", type="password")
             if st.button("Sačuvaj novu lozinku"):
@@ -254,11 +236,16 @@ def main():
                 else:
                     st.error("Lozinka ne može biti prazna.")
 
-        # token-specifične postavke
+        #  ▼ zaštita od KeyError
+        ucfg.setdefault("recipients", "")
+        ucfg.setdefault("auto_send", False)
+
         st.subheader("Token i primaoci")
-        st.session_state["token"] = st.text_input("Token", st.session_state["token"], type="password")
+        st.session_state["token"] = st.text_input("Token",
+                                                  st.session_state["token"],
+                                                  type="password")
         ucfg["recipients"] = st.text_input("Recipients", ucfg["recipients"])
-        ucfg["auto_send"] = st.checkbox("Noćni auto-mail (02:05)", value=ucfg.get("auto_send", False))
+        ucfg["auto_send"]  = st.checkbox("Noćni auto-mail (02:05)", value=ucfg["auto_send"])
 
         c1, c2 = st.columns(2)
         if c1.button("Sačuvaj"):
@@ -266,11 +253,10 @@ def main():
             schedule_nightly(base_url, tok_hash, ucfg, gcfg)
             st.success("Sačuvano.")
         if c2.button("Test e-mail"):
-            send_mail("Test", "SMTP test", None, "", gcfg, ucfg["recipients"])
-            st.success("Poslat.")
+            send_mail("Test", "SMTP test", None, "", gcfg, ucfg["recipients"]); st.success("Poslat.")
         st.stop()
 
-    # ============= FILES =============
+    # =========== FILES ===========
     if not st.session_state["sid"]:
         if st.button("Login tokenom"):
             sid = login_token(st.session_state["token"], base_url)
@@ -331,7 +317,6 @@ def main():
                 st.download_button("Preuzmi ZIP", buf.read(),
                                    f"{unit['reg']}_{day}.zip",
                                    mime="application/zip")
-
         with c2:
             if st.button("Pošalji e-mail"):
                 if len(picked) == 1:
@@ -350,6 +335,6 @@ def main():
                           gcfg, ucfg["recipients"])
                 st.success("E-mail poslat!")
 
-# ───────────────────────────── entrypoint ──────────────────────────────────────────
+# ─── entry ────────────────────────────────────────────────────
 if __name__ == "__main__":
     main()
