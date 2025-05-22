@@ -1,166 +1,211 @@
-import os, json, zipfile, threading, requests, re, smtplib, hashlib, traceback
+import os, json, zipfile, threading, requests, re, smtplib, traceback, hashlib
 from datetime import datetime, date, time, timedelta, timezone
 from io import BytesIO
 from email.message import EmailMessage
+from urllib.parse import unquote_plus
 
 import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-# ───────── Streamlit init & dark theme ─────────
+# ────────── Streamlit init & dark skin ──────────
 st.set_page_config("Wialon DDD Manager", layout="wide")
 st.markdown(
     """
     <style>
-      body,.stApp{background:#111!important;color:#EEE!important;}
-      .stButton>button,.stDownloadButton>button,
-      .stTextInput>div>input,.stDateInput>div,
-      .stCheckbox>label>div{background:#222!important;color:#EEE!important;}
+      body, .stApp { background:#111!important; color:#EEE!important; }
+      .stButton>button, .stDownloadButton>button,
+      .stTextInput>div>input, .stDateInput>div,
+      .stCheckbox>label>div { background:#222!important; color:#EEE!important; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ───────── constants & paths ───────────────────
-DATE_RE = re.compile(r"20\d{6}")
-EU_BG   = timezone(timedelta(hours=2))
+# ────────── constants & paths ───────────────────
+DEFAULT_TOKEN = st.secrets.get("WIALON_TOKEN", "")
+DATE_RE       = re.compile(r"20\d{6}")
+EU_BG         = timezone(timedelta(hours=2))
 
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-GLOBAL_FILE = os.path.join(BASE_DIR, "global_settings.json")
-USER_DIR    = os.path.join(BASE_DIR, "user_settings")
-TIMERKEY    = "timers"
+BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
+GLOBAL_FILE   = os.path.join(BASE_DIR, "global_settings.json")   # SMTP + admin
+USER_DIR      = os.path.join(BASE_DIR, "user_settings")          # per-token
+TIMERKEY      = "timers"
 os.makedirs(USER_DIR, exist_ok=True)
 
 sha  = lambda s: hashlib.sha256(s.encode()).hexdigest()
 norm = lambda u: u.rstrip("/") + ("/wialon/ajax.html"
                                   if not u.rstrip("/").endswith("/wialon/ajax.html") else "")
 
-# ───────── helpers: global settings ────────────
+# ────────── global settings helpers ─────────────
 def load_global():
     if os.path.exists(GLOBAL_FILE):
-        try:
-            return json.load(open(GLOBAL_FILE, encoding="utf-8"))
-        except Exception:
-            pass
-    return {
-        "server": "", "port": "587", "username": "", "password": "",
-        "admin_pw_hash": "", "last_token": ""
-    }
+        try: return json.load(open(GLOBAL_FILE, encoding="utf-8"))
+        except Exception: pass
+    return {"server":"","port":"587","username":"","password":"","admin_pw_hash":""}
 
-def save_global(cfg): json.dump(cfg, open(GLOBAL_FILE, "w", encoding="utf-8"))
+def save_global(d): json.dump(d, open(GLOBAL_FILE,"w",encoding="utf-8"))
 
-# ───────── helpers: per-user settings ───────────
-def user_file(uid: int):
-    return os.path.join(USER_DIR, f"user_{uid}.json")
-
-def load_user(uid: int):
-    fn = user_file(uid)
+# ────────── per-token helpers ───────────────────
+def load_user(h):
+    fn = os.path.join(USER_DIR, f"{h}.json")
     if os.path.exists(fn):
-        try:
-            return json.load(open(fn, encoding="utf-8"))
-        except Exception:
-            pass
-    return {"recipients": "", "auto_send": False}
+        try: return json.load(open(fn, encoding="utf-8"))
+        except Exception: pass
+    return {"recipients":"","auto_send":False}
 
-def save_user(uid: int, cfg: dict):
-    json.dump(cfg, open(user_file(uid), "w", encoding="utf-8"))
+def save_user(h,d):
+    json.dump(d, open(os.path.join(USER_DIR,f"{h}.json"),"w",encoding="utf-8"))
 
-# ───────── Wialon API helpers ───────────────────
-def login_token(token: str, base: str):
+# ────────── Wialon API helpers ──────────────────
+def login_token(token, base):
     token = token.strip()
-    if len(token) != 64 or any(c not in "0123456789abcdefABCDEF" for c in token):
+    if len(token)!=64 or any(c not in "0123456789abcdefABCDEF" for c in token):
         return None
     try:
-        res = requests.get(
-            base,
-            params={"svc": "token/login", "params": json.dumps({"token": token})},
-            timeout=20,
-        ).json()
-        if isinstance(res, dict) and "error" in res:
-            return None
-        return res["eid"], res["user"]["id"], res["user"]["nm"]
-    except Exception:
-        return None
-
-def get_user_id_name(sid: str, base: str):
-    """Vrati (id, ime) ili None ako SID nije validan."""
-    try:
-        info = requests.get(
-            base,
-            params={
-                "svc": "core/search_items",
-                "sid": sid,
-                "params": json.dumps({
-                    "spec":{"itemsType":"avl_user","propName":"sys_id",
-                            "propValueMask":"*","sortType":"sys_name"},
-                    "force":1,"flags":1,"from":0,"to":1}),
-            },
-            timeout=20,
-        ).json()
-        if isinstance(info, dict) and "error" in info:
-            return None
-        users = info.get("items", [])
-        if not users:
-            return None
-        u = users[0]
-        return u["id"], u.get("nm","unknown")
-    except Exception:
-        return None
+        r = requests.get(base, params={"svc":"token/login",
+             "params":json.dumps({"token":token})}, timeout=20).json()
+        if isinstance(r,dict) and "error" in r: raise RuntimeError(r)
+        return r["eid"]
+    except Exception as e:
+        st.error(e); return None
 
 def wialon_call(svc,sid,params,base,*,get=False,retry=True):
     payload={"svc":svc,"sid":sid}
-    if params is not None:
-        payload["params"]=json.dumps(params,separators=(",",":"))
+    if params is not None: payload["params"]=json.dumps(params,separators=(",",":"))
     req=requests.get if get else requests.post
     res=req(base, params=payload if get else None,
-            data=payload if not get else None, timeout=20).json()
+             data=payload if not get else None, timeout=20).json()
     if retry and isinstance(res,dict) and res.get("error") in (1,5):
-        token=st.session_state.get("token","")
-        out=login_token(token,base)
-        if out:
-            new_sid,uid,_=out
-            st.session_state.update({"sid":new_sid,"user_id":uid})
+        new_sid=login_token(st.session_state["token"],base)
+        if new_sid:
+            st.session_state["sid"]=new_sid
             return wialon_call(svc,new_sid,params,base,get=get,retry=False)
     return res
 
-# (get_units, list_files, get_file ostaju isti kao u prethodnoj verziji,
-#  nisu menjani - za kratkoću koda ovde nisu ponovljeni. Kopiraj ih iz
-#  prethodne kompletne verzije bez promena.)
+def get_units(sid,base):
+    res=wialon_call("core/search_items",sid,
+        {"spec":{"itemsType":"avl_unit","propName":"sys_name",
+                 "propValueMask":"*","sortType":"sys_name"},
+         "force":1,"flags":1,"from":0,"to":0},base)
+    if isinstance(res,dict) and "error" in res: raise RuntimeError(res)
+    return [{"id":it["id"],"name":it.get("nm","N/A"),
+             "reg":it.get("prp",{}).get("reg_number","")} for it in res["items"]]
 
-# …………………………………………………………………………………
-#  Preskočeni delovi:  get_units, list_files, get_file,
-#  send_mail, schedule_nightly  – ostaju identični
-# …………………………………………………………………………………
+def list_files(sid,uid,day,base):
+    res=wialon_call("file/list",sid,
+        {"itemId":uid,"storageType":2,"path":"tachograph/",
+         "mask":"*","recursive":False,"fullPath":False},base)
+    if isinstance(res,dict):
+        if res.get("error")==5: return []
+        raise RuntimeError(res)
 
-# ───────── main UI ─────────────────────────────
-def main():
-    logo_path = os.path.join(BASE_DIR, "app_icon.png")
-    if os.path.exists(logo_path):
-        st.image(logo_path, width=220)
-
-    gcfg = load_global()
-
-    qs = st.experimental_get_query_params()
-    base_url = norm(qs.get("baseUrl", ["https://hst-api.wialon.com"])[0])
-    default_token = qs.get("token", [gcfg.get("last_token", "")])[0]
-    st.session_state.setdefault("token", default_token)
-    st.session_state.setdefault("sid", qs.get("sid", [None])[0])
-
-    # proveri da li sid još važi
-    if st.session_state["sid"] and "user_id" not in st.session_state:
-        res = get_user_id_name(st.session_state["sid"], base_url)
-        if res:
-            uid, uname = res
-            st.session_state.update({"user_id": uid, "user_name": uname})
+    out=[]
+    for f in res:
+        for k in ("ct","mt"):
+            ts=f.get(k)
+            if ts and datetime.fromtimestamp(ts,timezone.utc).date()==day:
+                out.append(f); break
         else:
-            st.session_state["sid"] = None    # SID ne važi – neka se user prijavi
-            st.info("Sesija je istekla. Prijavi se tokenom u Admin panelu.")
+            m=DATE_RE.search(f["n"])
+            if m:
+                date_str=m.group()[:8]
+                try:
+                    if datetime.strptime(date_str,"%Y%m%d").date()==day:
+                        out.append(f)
+                except ValueError:
+                    pass
+    out.sort(key=lambda x:x.get("mt",x.get("ct",0)), reverse=True)
+    return out
 
-    page = st.sidebar.radio("Navigacija", ["Files", "Admin"])
+def get_file(sid,uid,fname,base):
+    r=requests.get(base,
+        params={"svc":"file/get","sid":sid,
+                "params":json.dumps({"itemId":uid,"storageType":2,
+                                     "path":f"tachograph/{fname}"})},
+        timeout=20)
+    return r.content if r.status_code==200 else None
 
-    # (ostatak koda – Admin & Files sekcije – ostaje identičan kao
-    #  u prošloj kompletnoj verziji; nije menjan.)
-    # …………………………………………………………………………………
+# ────────── mail & nightly scheduler ────────────
+def send_mail(subj,body,att,fname,gcfg,rcpt):
+    try:
+        msg=EmailMessage(); msg["Subject"]=subj; msg["From"]=gcfg["username"]; msg["To"]=rcpt
+        msg.set_content(body)
+        if att: msg.add_attachment(att,maintype="application",subtype="zip",filename=fname)
+        with smtplib.SMTP(gcfg["server"],int(gcfg["port"])) as s:
+            s.starttls(); s.login(gcfg["username"],gcfg["password"]); s.send_message(msg)
+    except Exception as e:
+        st.error(f"SMTP greška: {e}")
 
-# ───────── entrypoint ───────────────────────────
-if __name__ == "__main__":
-    main()
+def schedule_nightly(base,h,ucfg,gcfg):
+    timers=st.session_state.setdefault(TIMERKEY,{})
+    if h in timers and timers[h].is_alive(): timers[h].cancel()
+    if not ucfg.get("auto_send"): return
+
+    now=datetime.now(EU_BG)
+    tomorrow=now.date()+(timedelta(days=1) if now.time()>=time(2,5) else timedelta())
+    run_dt=datetime.combine(tomorrow, time(2,5), tzinfo=EU_BG)
+    delay=(run_dt-now).total_seconds()
+
+    def job():
+        try:
+            sid=st.session_state["sid"]; 
+            if not sid: return
+            units=get_units(sid,base)
+            prev=(datetime.now(EU_BG)-timedelta(days=1)).date()
+            buf=BytesIO()
+            with zipfile.ZipFile(buf,"w") as z:
+                for u in units:
+                    for f in list_files(sid,u["id"],prev,base):
+                        d=get_file(sid,u["id"],f["n"],base)
+                        if d: z.writestr(os.path.join(u["reg"] or u["name"],f["n"]),d)
+            buf.seek(0)
+            send_mail(f"DDD fajlovi {prev:%d.%m.%Y}","Automatski ZIP za sva vozila.",
+                      buf.read(),f"DDD_{prev}.zip",gcfg,ucfg["recipients"])
+        finally:
+            schedule_nightly(base,h,ucfg,gcfg)
+
+    t=threading.Timer(delay,job); t.daemon=True
+    add_script_run_ctx(t); t.start(); timers[h]=t
+
+# ───────── main UI ───────────────────────────────────────────
+def main():
+    if os.path.exists(os.path.join(BASE_DIR,"app_icon.png")):
+        st.image(os.path.join(BASE_DIR,"app_icon.png"), width=220)
+
+    gcfg=load_global()
+
+    qs=st.experimental_get_query_params()
+    base_url=norm(qs.get("baseUrl",["https://hst-api.wialon.com"])[0])
+    st.session_state.setdefault("token", qs.get("token",[DEFAULT_TOKEN])[0])
+    st.session_state.setdefault("sid",   qs.get("sid",[None])[0])
+
+    page=st.sidebar.radio("Navigacija",["Files","Admin"])
+
+    # ===== ADMIN =====
+    if page=="Admin":
+        st.header("Admin panel")
+
+        # login
+        if gcfg["admin_pw_hash"]:
+            if not st.session_state.get("admin_ok"):
+                pw=st.sidebar.text_input("Admin lozinka", type="password")
+                if st.sidebar.button("Login"):
+                    st.session_state["admin_ok"]=sha(pw)==gcfg["admin_pw_hash"]
+                    if not st.session_state["admin_ok"]:
+                        st.sidebar.error("Pogrešna lozinka")
+                    st.experimental_rerun()
+                st.stop()
+        else:
+            st.sidebar.info("Postavi admin lozinku")
+            npw=st.sidebar.text_input("Nova lozinka", type="password")
+            if st.sidebar.button("Postavi"):
+                if npw.strip():
+                    gcfg["admin_pw_hash"]=sha(npw); save_global(gcfg)
+                    st.sidebar.success("Lozinka sačuvana – prijavi se")
+                else:
+                    st.sidebar.error("Lozinka ne može biti prazna.")
+            st.stop()
+
+        # global SMTP
+        st.subheader("SMTP (globalno)")
+        for fld in ("server","port","username","
