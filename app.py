@@ -115,14 +115,18 @@ def send_mail(subj,body,att,fname,gcfg,rcpt):
             s.starttls(); s.login(gcfg["username"],gcfg["password"]); s.send_message(msg)
     except Exception as e: st.error(f"SMTP greška: {e}")
 
-def schedule_nightly(base,h,ucfg,gcfg):
-    timers=st.session_state.setdefault(TIMERKEY,{})
-    if h in timers and timers[h].is_alive(): timers[h].cancel()
-    if not ucfg.get("auto_send"): return
-    now=datetime.now(EU_BG)
-    run_dt=datetime.combine(now.date()+(timedelta(days=1) if now.time()>=t(2,5) else timedelta()),
-                             t(2,5),tzinfo=EU_BG)
-    delay=(run_dt-now).total_seconds()
+def schedule_nightly(base, tok_hash, ucfg, gcfg):
+    timers = st.session_state.setdefault(TIMERKEY, {})
+    if tok_hash in timers and timers[tok_hash].is_alive():
+        timers[tok_hash].cancel()
+    if not ucfg.get("auto_send"):
+        return
+
+    now = datetime.now(EU_BG)
+    tomorrow = now.date() + (timedelta(days=1) if now.time() >= t(2, 5) else timedelta())
+    run_dt   = datetime.combine(tomorrow, t(2, 5), tzinfo=EU_BG)
+    delay    = (run_dt - now).total_seconds()
+
     def job():
         try:
             sid=st.session_state["sid"]; 
