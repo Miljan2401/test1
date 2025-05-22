@@ -89,24 +89,24 @@ def get_user_id_name(sid: str, base: str):
         params={
             "svc": "core/search_items",
             "sid": sid,
-            "params": json.dumps(
-                {
-                    "spec": {
-                        "itemsType": "avl_user",
-                        "propName": "sys_id",
-                        "propValueMask": "*",
-                        "sortType": "sys_name",
-                    },
-                    "force": 1,
-                    "flags": 1,
-                    "from": 0,
-                    "to": 1,
-                }
-            ),
+            "params": json.dumps({
+                "spec": {"itemsType": "avl_user", "propName": "sys_id",
+                         "propValueMask": "*", "sortType": "sys_name"},
+                "force": 1, "flags": 1, "from": 0, "to": 1
+            }),
         },
         timeout=20,
     ).json()
-    u = info["items"][0]
+
+    # ako Wialon vrati error → podigni izuzetak da se korisnik ponovo prijavi
+    if isinstance(info, dict) and "error" in info:
+        raise RuntimeError(info)
+
+    users = info.get("items", [])
+    if not users:
+        raise RuntimeError("Nema korisničkih podataka za dati SID")
+
+    u = users[0]
     return u["id"], u.get("nm", "unknown")
 
 def wialon_call(svc, sid, params, base, *, get=False, retry=True):
