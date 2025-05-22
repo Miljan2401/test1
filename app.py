@@ -120,9 +120,13 @@ def list_files(sid, uid, day, base):
                 out.append(f); break
         else:
             m = DATE_RE.search(f["n"])
-            if m and datetime.strptime(m.group(), "%Y%m%d").date() == day:
-                out.append(f)
-    out.sort(key=lambda x: x.get("mt", x.get("ct", 0)), reverse=True)
+            if m:
+                date_str = m.group()[:8]           # samo YYYYMMDD
+                try:
+                    if datetime.strptime(date_str, "%Y%m%d").date() == day:
+                        out.append(f)
+                except ValueError:
+                    pass    
     return out
 
 def get_file(sid, uid, fname, base):
