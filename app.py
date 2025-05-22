@@ -245,17 +245,27 @@ def main():
         ucfg.setdefault("auto_send", False)
 
         st.subheader("Token i primaoci")
-        st.session_state["token"] = st.text_input("Token",
-                                                  st.session_state["token"],
-                                                  type="password")
-        ucfg["recipients"] = st.text_input("Recipients", ucfg["recipients"])
-        ucfg["auto_send"]  = st.checkbox("Noćni auto-mail (02:05)", value=ucfg["auto_send"])
+        # korisnik može izmeniti token
+st.session_state["token"] = st.text_input(
+    "Token", st.session_state["token"], type="password")
 
-        c1, c2 = st.columns(2)
-        if c1.button("Sačuvaj"):
-            save_global(gcfg); save_user(tok_hash, ucfg)
-            schedule_nightly(base_url, tok_hash, ucfg, gcfg)
-            st.success("Sačuvano.")
+# ako je token promenjen, preračunaj hash i učitaj njegov fajl
+tok_hash = sha(st.session_state["token"])
+ucfg = load_user(tok_hash)
+ucfg.setdefault("recipients", "")
+ucfg.setdefault("auto_send", False)
+
+ucfg["recipients"] = st.text_input("Recipients", ucfg["recipients"])
+ucfg["auto_send"]  = st.checkbox("Noćni auto-mail (02:05)",
+                                 value=ucfg["auto_send"])
+
+c1, c2 = st.columns(2)
+if c1.button("Sačuvaj"):
+    save_global(gcfg)
+    save_user(tok_hash, ucfg)           # koristimo NOVI hash!
+    schedule_nightly(base_url, tok_hash, ucfg, gcfg)
+    st.success("Sačuvano.")
+
         if c2.button("Test e-mail"):
             send_mail("Test", "SMTP test", None, "", gcfg, ucfg["recipients"]); st.success("Poslat.")
         st.stop()
