@@ -1,0 +1,10 @@
+# .streamlit/config.toml
+[theme]               # podrazumevana (i jedina) tema
+base = "dark"         # "light" ili "dark"
+backgroundColor = "#111111"
+secondaryBackgroundColor = "#222222"
+textColor = "#FFFFFF"
+primaryColor = "#4C83F5"
+
+[client]              # sakrij ceo “hamburger” meni
+toolbarMode = "viewer"     # mogućnosti: auto | developer | viewer | minimal
