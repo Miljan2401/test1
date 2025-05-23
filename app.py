@@ -54,6 +54,20 @@ def load_user_by_hash(h):
 
 def save_user_by_hash(h, d):
     json.dump(d, open(os.path.join(USER_DIR, f"{h}.json"), "w", encoding="utf-8"))
+def login_token(token, base):
+    token = token.strip()
+    if len(token) != 64 or any(c not in "0123456789abcdefABCDEF" for c in token):
+        return None
+    try:
+        r = requests.get(base,
+                         params={"svc": "token/login",
+                                 "params": json.dumps({"token": token})},
+                         timeout=20).json()
+        if isinstance(r, dict) and "error" in r:
+            return None
+        return r["eid"]
+    except Exception:
+        return None
 
 def get_token_and_hash():
     token = st.session_state.get("token", DEFAULT_TOKEN)
