@@ -55,16 +55,30 @@ def load_user_by_hash(h):
 def save_user_by_hash(h, d):
     json.dump(d, open(os.path.join(USER_DIR, f"{h}.json"), "w", encoding="utf-8"))
 
-def login_token(token, base):
-    token = token.strip()
-    if len(token) != 64 or any(c not in "0123456789abcdefABCDEF" for c in token):
-        return None
-    try:
-        r = requests.get(base, params={"svc": "token/login", "params": json.dumps({"token": token})}, timeout=20).json()
-        if isinstance(r, dict) and "error" in r: raise RuntimeError(r)
-        return r["eid"]
-    except Exception as e:
-        st.error(e); return None
+def get_token_and_hash():
+    token = st.session_state.get("token", DEFAULT_TOKEN)
+    ucfg = None
+    tok_hash = None
+
+    for fn in os.listdir(USER_DIR):
+        path = os.path.join(USER_DIR, fn)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data.get("token") == token:
+                    tok_hash = fn[:-5]
+                    ucfg = data
+                    break
+        except Exception:
+            continue
+
+    if ucfg is None:
+        tok_hash = sha(token)
+        ucfg = {"token": token, "recipients": "", "auto_send": False}
+        save_user_by_hash(tok_hash, ucfg)
+
+    st.session_state["token"] = token
+    return token, tok_hash, ucfg
 
 def wialon_call(svc, sid, params, base, *, get=False, retry=True):
     payload = {"svc": svc, "sid": sid}
