@@ -54,21 +54,6 @@ def load_user_by_hash(h):
 
 def save_user_by_hash(h, d):
     json.dump(d, open(os.path.join(USER_DIR, f"{h}.json"), "w", encoding="utf-8"))
-def login_token(token, base):
-    token = token.strip()
-    if len(token) != 64 or any(c not in "0123456789abcdefABCDEF" for c in token):
-        return None
-    try:
-        r = requests.get(base,
-                         params={"svc": "token/login",
-                                 "params": json.dumps({"token": token})},
-                         timeout=20).json()
-        if isinstance(r, dict) and "error" in r:
-            return None
-        return r["eid"]
-    except Exception:
-        return None
-
 def get_token_and_hash():
     token = st.session_state.get("token", DEFAULT_TOKEN)
     ucfg = None
@@ -93,6 +78,17 @@ def get_token_and_hash():
 
     st.session_state["token"] = token
     return token, tok_hash, ucfg
+
+def login_token(token, base):
+    token = token.strip()
+    if len(token) != 64 or any(c not in "0123456789abcdefABCDEF" for c in token):
+        return None
+    try:
+        r = requests.get(base, params={"svc": "token/login", "params": json.dumps({"token": token})}, timeout=20).json()
+        if isinstance(r, dict) and "error" in r: raise RuntimeError(r)
+        return r["eid"]
+    except Exception as e:
+        st.error(e); return None
 
 def wialon_call(svc, sid, params, base, *, get=False, retry=True):
     payload = {"svc": svc, "sid": sid}
@@ -149,8 +145,8 @@ def send_mail(subj, body, att, fname, gcfg, rcpt):
             msg.add_attachment(att, maintype="application", subtype="zip", filename=fname)
         with smtplib.SMTP(gcfg["server"], int(gcfg["port"])) as s:
             s.starttls(); s.login(gcfg["username"], gcfg["password"]); s.send_message(msg)
-    except Exception:
-    return None
+    except Exception as e:
+        st.error(f"SMTP greška: {e}")
 
 def schedule_nightly(base, h, ucfg, gcfg):
     timers = st.session_state.setdefault(TIMERKEY, {})
