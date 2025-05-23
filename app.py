@@ -135,8 +135,8 @@ def send_mail(subj, body, att, fname, gcfg, rcpt):
             msg.add_attachment(att, maintype="application", subtype="zip", filename=fname)
         with smtplib.SMTP(gcfg["server"], int(gcfg["port"])) as s:
             s.starttls(); s.login(gcfg["username"], gcfg["password"]); s.send_message(msg)
-    except Exception as e:
-        st.error(f"SMTP greška: {e}")
+    except Exception:
+    return None
 
 def schedule_nightly(base, h, ucfg, gcfg):
     timers = st.session_state.setdefault(TIMERKEY, {})
